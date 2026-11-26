@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>点数</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="点数">
+<meta name="theme-color" content="#f2ece1">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
+<style>
+  :root{
+    --bg:#f2ece1; --card:#ffffff; --ink:#1c1c1e; --sub:#8a8a8e;
+    --line:#e6e1d7; --accent:#0a84ff; --green:#34c759;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:16px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+    padding-top:env(safe-area-inset-top);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 16px; font-weight:600; font-size:17px;
+    border-bottom:.5px solid var(--line); background:var(--bg);
+  }
+  header .tools{display:flex;gap:14px;font-size:13px;font-weight:500;color:var(--accent)}
+  header .tools span{cursor:pointer;opacity:.9}
+  header .tools span.off{color:var(--sub)}
+  #stage{
+    position:relative; flex:1; display:flex; align-items:center; justify-content:center;
+    overflow:hidden; padding:8px;
+  }
+  canvas{max-width:100%; max-height:100%; display:block; border-radius:10px}
+  #empty{
+    text-align:center; color:var(--sub); padding:24px; max-width:340px;
+  }
+  #empty .big{font-size:56px; line-height:1; margin-bottom:14px; opacity:.35}
+  #empty h2{font-size:17px; color:var(--ink); margin:0 0 14px; font-weight:600}
+  #empty ul{text-align:left; margin:0; padding-left:20px; font-size:14px; line-height:1.9}
+  #badge{
+    position:absolute; top:16px; left:50%; transform:translateX(-50%);
+    background:rgba(255,255,255,.92); backdrop-filter:blur(10px);
+    border:.5px solid var(--line); border-radius:999px;
+    padding:7px 18px; display:none; align-items:baseline; gap:8px;
+    box-shadow:0 2px 12px rgba(0,0,0,.06);
+  }
+  #badge b{font-size:28px; font-variant-numeric:tabular-nums; letter-spacing:-.5px}
+  #badge small{color:var(--sub); font-size:13px}
+  #badge em{font-style:normal; font-size:11px; color:var(--accent); font-weight:600}
+  #busy{
+    position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(242,236,225,.7); backdrop-filter:blur(2px); font-size:15px; color:var(--sub);
+  }
+  footer{padding:10px 14px 14px; background:var(--bg); border-top:.5px solid var(--line)}
+  .hint{text-align:center; font-size:12px; color:var(--sub); margin-bottom:8px; height:16px}
+  .row{display:flex; gap:10px}
+  button{
+    flex:1; border:0; border-radius:12px; padding:15px 10px;
+    font:600 16px -apple-system,"PingFang SC",sans-serif;
+    background:var(--card); color:var(--ink);
+    border:.5px solid var(--line); cursor:pointer;
+  }
+  button.primary{background:var(--accent); color:#fff; border-color:transparent}
+  button:active{opacity:.75}
+  input[type=file]{display:none}
+  #panel{
+    position:absolute; inset:auto 0 0 0; background:var(--card);
+    border-radius:16px 16px 0 0; padding:18px 18px 24px; display:none;
+    box-shadow:0 -8px 30px rgba(0,0,0,.12); z-index:10;
+  }
+  #panel h3{margin:0 0 4px; font-size:15px}
+  #panel .v{float:right; color:var(--sub); font-weight:400; font-variant-numeric:tabular-nums}
+  #panel input[type=range]{width:100%; margin:12px 0 6px; accent-color:var(--accent)}
+  #panel p{margin:0; font-size:12px; color:var(--sub)}
+  #panel .close{margin-top:14px; width:100%; padding:12px; background:var(--bg); border-radius:10px}
+</style>
+</head>
+<body>
+<header>
+  <span>点数</span>
+  <div class="tools">
+    <span id="btnNum">编号</span>
+    <span id="btnAdj">调整</span>
+  </div>
+</header>
+
+<div id="stage">
+  <div id="empty">
+    <div class="big">◎</div>
+    <h2>拍一张照片，自动数清有多少个</h2>
+    <ul>
+      <li>把带孔的零件平铺在桌面上，别叠在一起</li>
+      <li>零件和桌面颜色反差越大越准</li>
+      <li>光线均匀，避免强反光和大片阴影</li>
+    </ul>
+    <p style="font-size:12px;margin-top:16px;opacity:.7">首次打开需加载模型（约 10MB），之后可离线使用</p>
+  </div>
+  <canvas id="cv" style="display:none"></canvas>
+  <div id="badge"><b id="num">0</b><small>个</small><em id="engine">AI</em></div>
+  <div id="busy">识别中…</div>
+  <div id="panel">
+    <h3>识别灵敏度 <span class="v" id="confVal">0.30</span></h3>
+    <input type="range" id="conf" min="0.15" max="0.60" step="0.05" value="0.30">
+    <p>数少了往左调，数多了往右调</p>
+    <button class="close" id="btnClose">完成</button>
+  </div>
+</div>
+
+<footer>
+  <div class="hint" id="hint"></div>
+  <div class="row">
+    <button class="primary" id="btnCam">拍照</button>
+    <button id="btnLib">相册</button>
+  </div>
+</footer>
+
+<input type="file" id="fileCam" accept="image/*" capture="environment">
+<input type="file" id="fileLib" accept="image/*">
+
+<script src="ort.min.js"></script>
+<script src="core.js?v=3"></script>
+<script src="app.js?v=3"></script>
+</body>
+</html>
