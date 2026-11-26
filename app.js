@@ -37,9 +37,34 @@
     $('busyText').style.whiteSpace = 'pre-line';
   }
 
+  // 备用源：github.io 在国内不稳定时，自动切换
+  const CDN_BASE = 'https://cdn.jsdelivr.net/gh/zadyd/countapp@main/';
+
+  function fetchTimeout(url, ms) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), ms);
+    return fetch(url, { signal: ctl.signal }).finally(() => clearTimeout(timer));
+  }
+
+  // 先试本机源，失败/超时再试备用 CDN
+  async function fetchModelBytes(onProgress) {
+    const sources = ['./model.onnx', CDN_BASE + 'model.onnx'];
+    let lastErr = null;
+    for (let i = 0; i < sources.length; i++) {
+      try {
+        if (i > 0) setStatus('切换备用源…', 0);
+        return await fetchWithProgress(sources[i], onProgress, i === 0 ? 15000 : 60000);
+      } catch (e) {
+        lastErr = e;
+        console.warn('源失败:', sources[i], e.message);
+      }
+    }
+    throw lastErr || new Error('所有下载源都失败');
+  }
+
   // 带进度的下载
-  async function fetchWithProgress(url, onProgress) {
-    const resp = await fetch(url);
+  async function fetchWithProgress(url, onProgress, timeoutMs) {
+    const resp = await (timeoutMs ? fetchTimeout(url, timeoutMs) : fetch(url));
     if (!resp.ok) throw new Error('下载失败 HTTP ' + resp.status);
     const total = Number(resp.headers.get('content-length')) || 0;
     if (!resp.body || !total) return new Uint8Array(await resp.arrayBuffer());
@@ -68,7 +93,7 @@
     ort.env.wasm.simd = true;
     ort.env.logLevel = 'error';
     setStatus('加载模型…', 0);
-    const bytes = await fetchWithProgress('./model.onnx', (p) => setStatus('加载模型…', p));
+    const bytes = await fetchModelBytes((p) => setStatus('加载模型…', p));
 
     // 手机上图优化极慢（wasm 环境），用 basic 能快一个数量级；本场景精度不受影响
     setStatus('初始化推理引擎…', undefined);
