@@ -16,7 +16,7 @@
   let imgBitmap = null;      // 当前图片
   let imgW = 0, imgH = 0;
   let points = [];           // {x,y,w} 归一化
-  let confThr = 0.30;
+  let confThr = 0.55;
   let showNumbers = true;
   let busy = false;
   let boxW = 0.02;

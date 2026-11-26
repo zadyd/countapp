@@ -1,4 +1,4 @@
-const CACHE = 'count-v3';
+const CACHE = 'count-v4';
 const FILES = ['./', './index.html', './app.js', './core.js', './ort.min.js',
                './ort-wasm-simd-threaded.wasm', './model.onnx', './icon.png', './manifest.json'];
 self.addEventListener('install', e => {
