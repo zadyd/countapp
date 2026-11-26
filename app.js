@@ -1,5 +1,5 @@
 /* 点数 · 网页版
-   模型：YOLO11n 单类「孔洞」检测器（ONNX INT8，640 输入）
+   模型：YOLO11n 单类「孔洞」检测器（ONNX，640 输入）
 */
 (function () {
   'use strict';
@@ -13,30 +13,74 @@
 
   let session = null;
   let modelReady = false;
-  let imgBitmap = null;      // 当前图片
+  let imgBitmap = null;
   let imgW = 0, imgH = 0;
-  let points = [];           // {x,y,w} 归一化
+  let points = [];
   let confThr = 0.55;
   let showNumbers = true;
-  let busy = false;
   let boxW = 0.02;
+
+  // ---------- 加载状态 ----------
+  function setStatus(text, pct, showRetry) {
+    const b = $('busy');
+    if (text === null) { b.style.display = 'none'; return; }
+    b.style.display = 'flex';
+    $('busyText').textContent = text;
+    const bar = $('bar');
+    bar.style.display = (pct === undefined) ? 'none' : 'block';
+    if (pct !== undefined) bar.firstElementChild.style.width = Math.round(pct * 100) + '%';
+    $('btnRetry').style.display = showRetry ? 'inline-block' : 'none';
+  }
+
+  function showError(msg) {
+    setStatus('加载失败\n' + msg, undefined, true);
+    $('busyText').style.whiteSpace = 'pre-line';
+  }
+
+  // 带进度的下载
+  async function fetchWithProgress(url, onProgress) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('下载失败 HTTP ' + resp.status);
+    const total = Number(resp.headers.get('content-length')) || 0;
+    if (!resp.body || !total) return new Uint8Array(await resp.arrayBuffer());
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      // content-length 是压缩后大小，实际读到的是解压后字节，进度封顶 95%
+      onProgress(Math.min(0.95, received / total));
+    }
+    const out = new Uint8Array(received);
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return out;
+  }
 
   // ---------- 模型 ----------
   async function initModel() {
-    if (typeof ort === 'undefined') { console.error('ort 未加载'); return; }
+    if (typeof ort === 'undefined') throw new Error('推理引擎未加载');
     ort.env.wasm.wasmPaths = './';
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.simd = true;
     ort.env.logLevel = 'error';
-    session = await ort.InferenceSession.create('./model.onnx', {
+    setStatus('加载模型…', 0);
+    const bytes = await fetchWithProgress('./model.onnx', (p) => setStatus('加载模型…', p));
+    setStatus('初始化推理引擎…', undefined);
+    session = await ort.InferenceSession.create(bytes, {
       executionProviders: ['wasm'],
       graphOptimizationLevel: 'all'
     });
     modelReady = true;
+    setStatus(null);
   }
 
   async function runModel(bitmap) {
-    const w = bitmap.width, h = bitmap.height;
+    const w = bitmap.width || bitmap.naturalWidth;
+    const h = bitmap.height || bitmap.naturalHeight;
     const off = document.createElement('canvas');
     off.width = S; off.height = S;
     const octx = off.getContext('2d', { willReadFrequently: true });
@@ -49,7 +93,7 @@
     const px = octx.getImageData(0, 0, S, S).data;
     const plane = S * S;
     const data = new Float32Array(3 * plane);
-    for (let i = 0, n = plane; i < n; i++) {
+    for (let i = 0; i < plane; i++) {
       const j = i * 4;
       data[i] = px[j] / 255;
       data[plane + i] = px[j + 1] / 255;
@@ -62,8 +106,7 @@
     const out = await session.run(feeds);
     const ms = performance.now() - t0;
     const res = out[session.outputNames[0]];
-    const nA = res.dims[2];
-    const r = decodeOutput(res.data, nA, confThr, 0.45, w, h, S);
+    const r = decodeOutput(res.data, res.dims[2], confThr, 0.45, w, h, S);
     return { points: r.points, ms };
   }
 
@@ -135,29 +178,30 @@
   // ---------- 主流程 ----------
   async function handleBitmap(bitmap) {
     imgBitmap = bitmap;
-    imgW = bitmap.width;
-    imgH = bitmap.height;
+    imgW = bitmap.width || bitmap.naturalWidth;
+    imgH = bitmap.height || bitmap.naturalHeight;
     $('empty').style.display = 'none';
     cv.style.display = 'block';
-    busy = true;
-    $('busy').style.display = 'flex';
+    setStatus('识别中…', undefined);
     try {
       if (!modelReady) await initModel();
+      setStatus('识别中…', undefined);
       const r = await runModel(bitmap);
       points = r.points;
       boxW = points.length ? median(points.map(p => p.w)) : 0.02;
       $('engine').textContent = 'AI';
-      console.log('inference', r.ms.toFixed(0), 'ms', points.length);
+      setStatus(null);
+      $('hint').textContent = points.length
+        ? `耗时 ${r.ms.toFixed(0)}ms · 点空白处补漏，点标记删除`
+        : '没识别到，试试调整灵敏度';
     } catch (e) {
       console.error(e);
-      $('hint').textContent = '识别失败：' + e.message;
+      setStatus(null);
+      $('hint').textContent = '识别失败：' + (e.message || e);
       points = [];
     }
-    busy = false;
-    $('busy').style.display = 'none';
     layout();
     updateBadge();
-    $('hint').textContent = points.length ? '点空白处补漏，点标记删除' : '没识别到，试试调整灵敏度';
   }
 
   function median(arr) {
@@ -167,23 +211,28 @@
 
   async function fileToBitmap(file) {
     if (!file) return null;
-    try { return await createImageBitmap(file); }
-    catch (e) {
-      // 兜底：iOS 上个别格式 createImageBitmap 不支持
+    try {
+      return await createImageBitmap(file);
+    } catch (e) {
+      // iOS 上 HEIC 等格式 createImageBitmap 可能失败，回退到 <img>
       return await new Promise((res, rej) => {
         const url = URL.createObjectURL(file);
         const im = new Image();
         im.onload = () => { URL.revokeObjectURL(url); res(im); };
-        im.onerror = rej;
+        im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('图片无法解码')); };
         im.src = url;
       });
     }
   }
 
   async function fromFile(file) {
-    const bmp = await fileToBitmap(file);
-    if (!bmp) return;
-    await handleBitmap(bmp);
+    if (!file) return;
+    try {
+      const bmp = await fileToBitmap(file);
+      if (bmp) await handleBitmap(bmp);
+    } catch (e) {
+      $('hint').textContent = '图片读取失败：' + (e.message || e);
+    }
   }
 
   // ---------- 交互 ----------
@@ -215,12 +264,8 @@
     if (imgBitmap) layout();
   });
 
-  $('btnAdj').addEventListener('click', () => {
-    $('panel').style.display = 'block';
-  });
-  $('btnClose').addEventListener('click', () => {
-    $('panel').style.display = 'none';
-  });
+  $('btnAdj').addEventListener('click', () => { $('panel').style.display = 'block'; });
+  $('btnClose').addEventListener('click', () => { $('panel').style.display = 'none'; });
   $('conf').addEventListener('input', (e) => {
     confThr = parseFloat(e.target.value);
     $('confVal').textContent = confThr.toFixed(2);
@@ -229,22 +274,31 @@
     if (imgBitmap) await handleBitmap(imgBitmap);
   });
 
+  $('btnRetry').addEventListener('click', () => {
+    location.replace(location.pathname + '?r=' + Date.now());
+  });
+
   window.addEventListener('resize', () => { if (imgBitmap) layout(); });
 
   // ---------- 启动 ----------
   (async function boot() {
-    // 预加载模型，第一次点按钮时不用等太久
-    try { await initModel(); } catch (e) {
+    try {
+      await initModel();
+    } catch (e) {
       console.error('模型加载失败', e);
+      showError(e.message || String(e));
+      return;
     }
 
     const q = new URLSearchParams(location.search);
     if (q.has('demo')) {
-      const r = await fetch('./demo.jpg');
-      const blob = await r.blob();
-      const bmp = await createImageBitmap(blob);
-      await handleBitmap(bmp);
+      try {
+        const r = await fetch('./demo.jpg');
+        const blob = await r.blob();
+        await handleBitmap(await createImageBitmap(blob));
+      } catch (e) { console.error(e); }
     }
+
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js').catch(() => {});
     }
