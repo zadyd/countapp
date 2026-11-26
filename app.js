@@ -69,11 +69,25 @@
     ort.env.logLevel = 'error';
     setStatus('加载模型…', 0);
     const bytes = await fetchWithProgress('./model.onnx', (p) => setStatus('加载模型…', p));
+
+    // 手机上图优化极慢（wasm 环境），用 basic 能快一个数量级；本场景精度不受影响
     setStatus('初始化推理引擎…', undefined);
-    session = await ort.InferenceSession.create(bytes, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all'
-    });
+    let slow = 0;
+    const slowTimer = setInterval(() => {
+      slow += 1;
+      if (slow === 1) setStatus('首次加载较慢，请稍候…', undefined);
+      if (slow === 3) setStatus('还在初始化（约需 30~60 秒）…', undefined);
+      if (slow === 6) setStatus('初始化时间过长，可点重新加载重试', undefined, true);
+    }, 10000);
+
+    try {
+      session = await ort.InferenceSession.create(bytes, {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'basic'
+      });
+    } finally {
+      clearInterval(slowTimer);
+    }
     modelReady = true;
     setStatus(null);
   }
